@@ -1,0 +1,117 @@
+{
+  "_source": "RAPP/rapp_swarm/utils/azure_file_storage.py AzureFileStorageManager (captured 2026-07-18)",
+  "methods": {
+    "delete_file": {
+      "params": [
+        "directory_name",
+        "file_name"
+      ],
+      "required": [
+        "directory_name",
+        "file_name"
+      ]
+    },
+    "ensure_directory_exists": {
+      "params": [
+        "directory_name"
+      ],
+      "required": [
+        "directory_name"
+      ]
+    },
+    "file_exists": {
+      "params": [
+        "directory_name",
+        "file_name"
+      ],
+      "required": [
+        "directory_name",
+        "file_name"
+      ]
+    },
+    "generate_download_url": {
+      "params": [
+        "directory",
+        "filename",
+        "expiry_minutes"
+      ],
+      "required": [
+        "directory",
+        "filename"
+      ]
+    },
+    "get_file_properties": {
+      "params": [
+        "directory_name",
+        "file_name"
+      ],
+      "required": [
+        "directory_name",
+        "file_name"
+      ]
+    },
+    "list_files": {
+      "params": [
+        "directory_name",
+        "auto_create"
+      ],
+      "required": [
+        "directory_name"
+      ]
+    },
+    "read_file": {
+      "params": [
+        "directory_name",
+        "file_name"
+      ],
+      "required": [
+        "directory_name",
+        "file_name"
+      ]
+    },
+    "read_file_binary": {
+      "params": [
+        "directory_name",
+        "file_name"
+      ],
+      "required": [
+        "directory_name",
+        "file_name"
+      ]
+    },
+    "read_json": {
+      "params": [],
+      "required": []
+    },
+    "refresh_credentials": {
+      "params": [],
+      "required": []
+    },
+    "set_memory_context": {
+      "params": [
+        "guid"
+      ],
+      "required": []
+    },
+    "write_file": {
+      "params": [
+        "directory_name",
+        "file_name",
+        "content"
+      ],
+      "required": [
+        "directory_name",
+        "file_name",
+        "content"
+      ]
+    },
+    "write_json": {
+      "params": [
+        "data"
+      ],
+      "required": [
+        "data"
+      ]
+    }
+  }
+}

@@ -4,13 +4,15 @@ set -e
 # RAPP Brainstem Installer
 # Usage: curl -fsSL https://microsoft.github.io/aibast-agents-library/install.sh | bash
 # Pin a version: curl ... install.sh | bash -s -- --version v0.6.0
+#            or: BRAINSTEM_VERSION=v0.6.0 curl ... install.sh | bash
+#                (env var form survives the pipe; --version wins if both given)
 
 BRAINSTEM_HOME="$HOME/.brainstem"
 BRAINSTEM_BIN="$HOME/.local/bin"
 VENV_DIR="$BRAINSTEM_HOME/venv"
 REPO_URL="https://github.com/microsoft/aibast-agents-library.git"
 REMOTE_VERSION_URL="https://raw.githubusercontent.com/microsoft/aibast-agents-library/main/rapp_brainstem/VERSION"
-PIN_VERSION=""
+PIN_VERSION="${BRAINSTEM_VERSION:-}"
 
 # Colors
 RED='\033[0;31m'
@@ -234,6 +236,45 @@ check_prereqs() {
     fi
 }
 
+# On upgrade, decide what to do with the user's existing soul.md (issue #40).
+# Args: <old_soul> <new_default_soul>. The new checkout's default is already at
+# <new_default_soul>; <old_soul> is the pre-upgrade file we backed up.
+#   return 0 → refreshed: keep the new default in place, save the old one to
+#              soul.md.bak-<date>, and print one line saying so.
+#   return 1 → preserve : caller restores <old_soul> byte-for-byte (today's behavior).
+# It only returns 0 when the old soul is an UNMODIFIED historical default — its
+# normalized hash (rapp_brainstem/tests/soul_hash.py) is listed in the manifest —
+# AND the new default differs. Any customization, or any uncertainty (no python, no
+# manifest, unreadable/undecodable file), fails safe to preserve. It never clobbers.
+maybe_refresh_soul() {
+    local old="$1" newdef="$2"
+    local src_dir="$BRAINSTEM_HOME/src/rapp_brainstem"
+    local hasher="$src_dir/tests/soul_hash.py"
+    local manifest="$src_dir/tests/soul_defaults.sha256"
+
+    [ -n "${PYTHON_CMD:-}" ] && [ -f "$hasher" ] && [ -f "$manifest" ] || return 1
+
+    local oldhash newhash
+    oldhash=$("$PYTHON_CMD" "$hasher" "$old" 2>/dev/null) || return 1
+    [ -n "$oldhash" ] || return 1
+    # Not an unmodified default (customized or unrecognizable) → preserve.
+    awk -v h="$oldhash" '/^[[:space:]]*#/{next} $1==h{f=1; exit} END{exit !f}' "$manifest" || return 1
+    # A known default — only refresh if the new default actually differs.
+    newhash=$("$PYTHON_CMD" "$hasher" "$newdef" 2>/dev/null) || return 1
+    [ -n "$newhash" ] && [ "$oldhash" != "$newhash" ] || return 1
+
+    local bak="$src_dir/soul.md.bak-$(date +%Y%m%d)"
+    # Don't clobber an earlier same-day backup (a second refresh on the same date).
+    if [ -e "$bak" ]; then
+        local n=1
+        while [ -e "${bak}-${n}" ]; do n=$((n+1)); done
+        bak="${bak}-${n}"
+    fi
+    cp "$old" "$bak" 2>/dev/null || return 1
+    echo -e "  ${GREEN}✓${NC} Refreshed default soul (yours was an unmodified default); backup at ${bak}"
+    return 0
+}
+
 install_brainstem() {
     echo ""
     echo "Installing RAPP Brainstem..."
@@ -242,6 +283,7 @@ install_brainstem() {
     local AGENTS_DIR="$BRAINSTEM_HOME/src/rapp_brainstem/agents"
     local SOUL_FILE="$BRAINSTEM_HOME/src/rapp_brainstem/soul.md"
     local ENV_FILE="$BRAINSTEM_HOME/src/rapp_brainstem/.env"
+    local DATA_DIR="$BRAINSTEM_HOME/src/rapp_brainstem/.brainstem_data"
     local LOCAL_VERSION_FILE="$BRAINSTEM_HOME/src/rapp_brainstem/VERSION"
 
     if [ -d "$BRAINSTEM_HOME/src/.git" ]; then
@@ -266,8 +308,8 @@ install_brainstem() {
             echo "  Switching v${LOCAL_VER} → v${TARGET_VER}..."
 
             # 1. Backup user's local files (soul, custom agents, .env)
-            local BACKUP="/tmp/brainstem-upgrade-$$"
-            mkdir -p "$BACKUP"
+            local BACKUP
+            BACKUP=$(mktemp -d "${TMPDIR:-/tmp}/brainstem-upgrade-XXXXXX")
             [ -f "$SOUL_FILE" ] && cp "$SOUL_FILE" "$BACKUP/soul.md"
             [ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$BACKUP/.env"
             if [ -d "$AGENTS_DIR" ]; then
@@ -277,18 +319,25 @@ install_brainstem() {
             fi
             echo -e "  ${GREEN}✓${NC} Backed up soul, agents, config"
 
-            # 2. Fetch and checkout target version
+            # 2. Fetch and checkout target version.
+            # Guard the fetch: offline (or a black-holed github) must not abort the
+            # whole script under `set -e` — we fall back to whatever is already local.
             cd "$BRAINSTEM_HOME/src"
             git stash --quiet 2>/dev/null || true
-            git fetch origin --tags --quiet 2>/dev/null
+            git fetch origin --tags --quiet 2>/dev/null || true
             if [ -n "$PIN_VERSION" ]; then
-                # Checkout the exact tagged version
-                if git rev-parse "$PIN_VERSION" >/dev/null 2>&1; then
-                    git checkout "$PIN_VERSION" --quiet 2>/dev/null
-                    echo -e "  ${GREEN}✓${NC} Checked out ${PIN_VERSION}"
+                # Resolve the pin against every tag form we ship: the documented
+                # v0.6.0 UX, a bare 0.6.0, and the actual release tag brainstem-v0.6.0.
+                TAG_REF=""
+                for cand in "$PIN_VERSION" "v${PIN_VERSION#v}" "brainstem-${PIN_VERSION#v}" "brainstem-v${PIN_VERSION#v}"; do
+                    if git rev-parse "$cand" >/dev/null 2>&1; then TAG_REF="$cand"; break; fi
+                done
+                if [ -n "$TAG_REF" ]; then
+                    git checkout "$TAG_REF" --quiet 2>/dev/null
+                    echo -e "  ${GREEN}✓${NC} Checked out ${TAG_REF}"
                 else
                     echo -e "  ${RED}✗${NC} Version ${PIN_VERSION} not found. Available versions:"
-                    git tag -l 'v*' | sort -V | sed 's/^/    /'
+                    git tag -l 'brainstem-v*' 'v*' | sort -V | sed 's/^/    /'
                     exit 1
                 fi
             else
@@ -297,17 +346,35 @@ install_brainstem() {
             fi
 
             # 3. Restore user's local files (merge, don't overwrite)
-            [ -f "$BACKUP/soul.md" ] && cp "$BACKUP/soul.md" "$SOUL_FILE"
+            # soul.md: refresh it only when the pre-upgrade file was an unmodified
+            # historical default (issue #40); any customization is preserved as-is.
+            if [ -f "$BACKUP/soul.md" ]; then
+                if ! maybe_refresh_soul "$BACKUP/soul.md" "$SOUL_FILE"; then
+                    cp "$BACKUP/soul.md" "$SOUL_FILE"
+                fi
+            fi
             [ -f "$BACKUP/.env" ] && cp "$BACKUP/.env" "$ENV_FILE"
             if [ -d "$BACKUP/agents" ]; then
-                # Restore user agents that aren't in the repo (custom ones)
+                # Only restore genuinely user-added agents. Compute the set the repo
+                # now ships from the fresh checkout and skip-restore anything in it —
+                # otherwise bundled agents (context_memory, manage_memory, hacker_news)
+                # get reverted to the backed-up copies on every upgrade (issue #2), so
+                # bundled-agent fixes never reach existing users.
+                local SHIPPED=""
+                for shipped_file in "$AGENTS_DIR"/*.py; do
+                    [ -f "$shipped_file" ] || continue
+                    SHIPPED="$SHIPPED $(basename "$shipped_file")"
+                done
                 for agent_file in "$BACKUP/agents"/*.py; do
+                    [ -f "$agent_file" ] || continue
                     local fname=$(basename "$agent_file")
                     # Skip core agents that the repo manages
                     case "$fname" in
                         basic_agent.py|__init__.py) continue ;;
                     esac
-                    # If user has a custom agent, keep it
+                    # Skip anything shipped in the fresh checkout (bundled agents)
+                    case " $SHIPPED " in *" $fname "*) continue ;; esac
+                    # Genuinely user-added agent — keep it
                     cp "$agent_file" "$AGENTS_DIR/$fname"
                 done
                 echo -e "  ${GREEN}✓${NC} Restored custom agents + soul + config"
@@ -315,23 +382,70 @@ install_brainstem() {
 
             # 4. Clean up backup
             rm -rf "$BACKUP"
-            echo -e "  ${GREEN}✓${NC} ${PIN_VERSION:+Pinned to}${PIN_VERSION:-Upgrade complete:} v${TARGET_VER}"
+            # Report what actually happened — the fetch/pull above tolerates failure
+            # (offline falls back to local bytes), so read the landed version from
+            # disk instead of announcing the target as fact.
+            local LANDED_VER
+            LANDED_VER=$(cat "$LOCAL_VERSION_FILE" 2>/dev/null | tr -d '[:space:]')
+            if [ "$LANDED_VER" = "$TARGET_VER" ]; then
+                echo -e "  ${GREEN}✓${NC} ${PIN_VERSION:+Pinned to}${PIN_VERSION:-Upgrade complete:} v${TARGET_VER}"
+            else
+                echo -e "  ${YELLOW}⚠${NC} Update did not land — still on v${LANDED_VER:-unknown} (wanted v${TARGET_VER}); launching what's installed"
+            fi
         fi
     else
         echo "  Fresh install — cloning repository..."
+        # A broken prior install (src present but .git gone) may still hold the user's
+        # soul, .env, and custom agents — none of which are in git. Preserve them
+        # before wiping so a re-run can't silently destroy the user's work. The common
+        # case (no existing src) leaves FRESH_BACKUP empty and skips all of this.
+        local FRESH_BACKUP=""
+        if [ -d "$BRAINSTEM_HOME/src/rapp_brainstem" ]; then
+            FRESH_BACKUP=$(mktemp -d "${TMPDIR:-/tmp}/brainstem-fresh-XXXXXX")
+            mkdir -p "$FRESH_BACKUP/agents"
+            [ -f "$SOUL_FILE" ] && cp "$SOUL_FILE" "$FRESH_BACKUP/soul.md" 2>/dev/null || true
+            [ -f "$ENV_FILE" ] && cp "$ENV_FILE" "$FRESH_BACKUP/.env" 2>/dev/null || true
+            [ -d "$AGENTS_DIR" ] && cp "$AGENTS_DIR"/*.py "$FRESH_BACKUP/agents/" 2>/dev/null || true
+            [ -d "$DATA_DIR" ] && cp -R "$DATA_DIR" "$FRESH_BACKUP/.brainstem_data" 2>/dev/null || true
+        fi
         rm -rf "$BRAINSTEM_HOME/src" 2>/dev/null || true
-        git clone --quiet "$REPO_URL" "$BRAINSTEM_HOME/src"
-        # If pinning, checkout the specific tag after clone
+        git clone --quiet "$REPO_URL" "$BRAINSTEM_HOME/src" || {
+            echo -e "  ${RED}✗${NC} Clone failed — check your network and re-run the installer"
+            if [ -n "$FRESH_BACKUP" ]; then
+                echo -e "    Your soul, agents, and config were preserved at: ${FRESH_BACKUP}"
+            fi
+            exit 1
+        }
+        # If pinning, checkout the specific tag after clone (accepts every tag form).
         if [ -n "$PIN_VERSION" ]; then
             cd "$BRAINSTEM_HOME/src"
-            if git rev-parse "$PIN_VERSION" >/dev/null 2>&1; then
-                git checkout "$PIN_VERSION" --quiet 2>/dev/null
-                echo -e "  ${GREEN}✓${NC} Checked out ${PIN_VERSION}"
+            git fetch origin --tags --quiet 2>/dev/null || true
+            TAG_REF=""
+            for cand in "$PIN_VERSION" "v${PIN_VERSION#v}" "brainstem-${PIN_VERSION#v}" "brainstem-v${PIN_VERSION#v}"; do
+                if git rev-parse "$cand" >/dev/null 2>&1; then TAG_REF="$cand"; break; fi
+            done
+            if [ -n "$TAG_REF" ]; then
+                git checkout "$TAG_REF" --quiet 2>/dev/null
+                echo -e "  ${GREEN}✓${NC} Checked out ${TAG_REF}"
             else
                 echo -e "  ${RED}✗${NC} Version ${PIN_VERSION} not found. Available versions:"
-                git tag -l 'v*' | sort -V | sed 's/^/    /'
+                git tag -l 'brainstem-v*' 'v*' | sort -V | sed 's/^/    /'
                 exit 1
             fi
+        fi
+        # Restore any preserved user files over the fresh checkout.
+        if [ -n "$FRESH_BACKUP" ]; then
+            [ -f "$FRESH_BACKUP/soul.md" ] && cp "$FRESH_BACKUP/soul.md" "$SOUL_FILE" 2>/dev/null || true
+            [ -f "$FRESH_BACKUP/.env" ] && cp "$FRESH_BACKUP/.env" "$ENV_FILE" 2>/dev/null || true
+            for af in "$FRESH_BACKUP/agents"/*.py; do
+                [ -f "$af" ] || continue
+                fn=$(basename "$af")
+                case "$fn" in basic_agent.py|__init__.py) continue ;; esac
+                cp "$af" "$AGENTS_DIR/$fn" 2>/dev/null || true
+            done
+            [ -d "$FRESH_BACKUP/.brainstem_data" ] && cp -R "$FRESH_BACKUP/.brainstem_data" "$DATA_DIR" 2>/dev/null || true
+            rm -rf "$FRESH_BACKUP"
+            echo -e "  ${GREEN}✓${NC} Preserved your soul, agents, memories, and config"
         fi
     fi
     echo -e "  ${GREEN}✓${NC} Source code ready"
@@ -373,7 +487,7 @@ setup_deps() {
         "$VENV_DIR/bin/pip" install -r "$req_file"
 
     # Verify the critical imports actually work
-    if ! "$VENV_DIR/bin/python" -c "import flask, requests, dotenv" 2>/dev/null; then
+    if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
         echo -e "  ${RED}✗${NC} Dependencies failed to install"
         echo "    Try: $VENV_DIR/bin/pip install -r $req_file"
         exit 1
@@ -383,7 +497,7 @@ setup_deps() {
 
 ensure_deps() {
     # Quick import check — only install if something is missing
-    if "$VENV_DIR/bin/python" -c "import flask, requests, dotenv" 2>/dev/null; then
+    if "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
         echo -e "  ${GREEN}✓${NC} Dependencies verified"
         return 0
     fi
@@ -393,7 +507,7 @@ ensure_deps() {
     "$VENV_DIR/bin/pip" install -r "$req_file" --quiet 2>/dev/null || \
         "$VENV_DIR/bin/pip" install -r "$req_file"
 
-    if ! "$VENV_DIR/bin/python" -c "import flask, requests, dotenv" 2>/dev/null; then
+    if ! "$VENV_DIR/bin/python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
         echo -e "  ${RED}✗${NC} Dependencies failed — try: $VENV_DIR/bin/pip install -r $req_file"
         exit 1
     fi
@@ -422,7 +536,7 @@ if [ ! -x "$VENV_PYTHON" ]; then
 fi
 
 # Verify deps on every launch (fast no-op if already installed)
-if ! "$VENV_PYTHON" -c "import flask, requests, dotenv" 2>/dev/null; then
+if ! "$VENV_PYTHON" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
     "$BRAINSTEM_HOME/venv/bin/pip" install -r requirements.txt --quiet 2>/dev/null || true
 fi
 
@@ -458,10 +572,21 @@ create_env() {
 launch_brainstem() {
     export PATH="$BRAINSTEM_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-    # Always pull latest code before launching
+    # Refresh from the repo before launching (no-op if already current). Skip when
+    # a version is pinned — pulling main would move off the pinned tag — and on a
+    # detached HEAD (an earlier pin), which a bare pull can't fast-forward anyway.
     if [ -d "$BRAINSTEM_HOME/src/.git" ]; then
         cd "$BRAINSTEM_HOME/src"
-        git pull --quiet 2>/dev/null || true
+        local pre_pull_head
+        pre_pull_head=$(git rev-parse HEAD 2>/dev/null) || true
+        if [ -z "$PIN_VERSION" ] && git symbolic-ref -q HEAD >/dev/null 2>&1; then
+            git pull --quiet 2>/dev/null || true
+        fi
+        # The pull can bring a commit whose requirements.txt grew — resync deps so
+        # the launch below can't die importing a module the old checkout never needed.
+        if [ "$(git rev-parse HEAD 2>/dev/null)" != "$pre_pull_head" ]; then
+            "$VENV_DIR/bin/pip" install -r "$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt" --quiet 2>/dev/null || true
+        fi
     fi
 
     local venv_python="$VENV_DIR/bin/python"
@@ -501,14 +626,19 @@ except: pass
             local auth_prefix="token"
             if [[ "$saved_token" != ghu_* ]]; then auth_prefix="Bearer"; fi
             local check_status
-            check_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            check_status=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" \
                 -H "Authorization: $auth_prefix $saved_token" \
                 -H "Accept: application/json" \
                 -H "Editor-Version: vscode/1.95.0" \
                 -H "Editor-Plugin-Version: copilot/1.0.0" \
-                "https://api.github.com/copilot_internal/v2/token" 2>/dev/null)
+                "https://api.github.com/copilot_internal/v2/token" 2>/dev/null) || true
             if [[ "$check_status" == "200" ]]; then
                 echo -e "  ${GREEN}✓${NC} Already authenticated with GitHub Copilot"
+                needs_auth=false
+            elif [[ -z "$check_status" || "$check_status" == "000" ]]; then
+                # curl never reached GitHub (offline, captive portal, timeout) — that
+                # says nothing about the token. Keep it; the server retries live.
+                echo -e "  ${YELLOW}⚠${NC} Couldn't verify the saved token (no network) — keeping it"
                 needs_auth=false
             else
                 echo -e "  ${YELLOW}⚠${NC} Saved token expired — re-authenticating..."
@@ -524,9 +654,16 @@ except: pass
         echo -e "  ${CYAN}Authenticating with GitHub Copilot...${NC}"
         echo ""
 
+        # Best-effort auth: disable `set -e` for the whole block. Every curl and JSON
+        # parse below tolerates failure (empty response when offline), and the code
+        # already handles those cases gracefully — but under `set -e` the very first
+        # failed command substitution would abort the installer before the server can
+        # start. The user can always finish signing in later at /login.
+        set +e
+
         # Request device code
         local device_resp
-        device_resp=$(curl -fsSL -X POST "https://github.com/login/device/code" \
+        device_resp=$(curl -fsSL --max-time 15 -X POST "https://github.com/login/device/code" \
             -H "Accept: application/json" \
             -H "Content-Type: application/x-www-form-urlencoded" \
             -d "client_id=${client_id}" 2>/dev/null)
@@ -556,33 +693,36 @@ except: pass
             for i in $(seq 1 60); do
                 sleep "${interval:-5}"
                 local poll_resp
-                poll_resp=$(curl -fsSL -X POST "https://github.com/login/oauth/access_token" \
+                poll_resp=$(curl -fsSL --max-time 15 -X POST "https://github.com/login/oauth/access_token" \
                     -H "Accept: application/json" \
                     -H "Content-Type: application/x-www-form-urlencoded" \
-                    -d "client_id=${client_id}&device_code=${device_code}&grant_type=urn:ietf:params:oauth:grant-type:device_code" 2>/dev/null)
+                    -d "client_id=${client_id}&device_code=${device_code}&grant_type=urn:ietf:params:oauth:grant-type:device_code" 2>/dev/null) || true
 
                 local access_token error
                 access_token=$(echo "$poll_resp" | "$venv_python" -c "import sys,json; d=json.load(sys.stdin); print(d.get('access_token',''))" 2>/dev/null)
                 error=$(echo "$poll_resp" | "$venv_python" -c "import sys,json; d=json.load(sys.stdin); print(d.get('error',''))" 2>/dev/null)
 
                 if [[ -n "$access_token" ]]; then
-                    # Save token file (same format brainstem.py expects)
+                    # Save token file (same format brainstem.py expects), owner-only:
+                    # a default umask would land it 0644, world-readable on shared machines.
                     "$venv_python" -c "
-import sys, json
+import sys, json, os
 d = json.loads(sys.argv[1])
 out = {'access_token': d['access_token']}
 if d.get('refresh_token'): out['refresh_token'] = d['refresh_token']
-with open(sys.argv[2], 'w') as f: json.dump(out, f)
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f: json.dump(out, f)
+os.chmod(sys.argv[2], 0o600)
 " "$poll_resp" "$token_file"
 
                     # Validate Copilot access immediately
                     local copilot_check copilot_status
-                    copilot_check=$(curl -s -w "\n%{http_code}" \
+                    copilot_check=$(curl -s --max-time 15 -w "\n%{http_code}" \
                         -H "Authorization: token $access_token" \
                         -H "Accept: application/json" \
                         -H "Editor-Version: vscode/1.95.0" \
                         -H "Editor-Plugin-Version: copilot/1.0.0" \
-                        "https://api.github.com/copilot_internal/v2/token" 2>/dev/null)
+                        "https://api.github.com/copilot_internal/v2/token" 2>/dev/null) || true
                     copilot_status=$(echo "$copilot_check" | tail -1)
 
                     if [[ "$copilot_status" == "200" ]]; then
@@ -607,12 +747,19 @@ with open(sys.argv[2], 'w') as f: json.dump(out, f)
                     break
                 fi
 
+                # GitHub's device-flow contract: on slow_down, add 5s to the poll
+                # interval — keeping the old cadence gets every later poll rejected.
+                if [[ "$error" == "slow_down" ]]; then
+                    interval=$(( ${interval:-5} + 5 ))
+                fi
+
                 if [[ "$error" != "authorization_pending" && "$error" != "slow_down" && -n "$error" ]]; then
                     echo -e "  ${YELLOW}!${NC} Auth error: $error — sign in at http://localhost:7071/login"
                     break
                 fi
             done
         fi
+        set -e   # end best-effort auth block
     fi
 
     # Step 2: Launch brainstem
@@ -622,20 +769,33 @@ with open(sys.argv[2], 'w') as f: json.dump(out, f)
 
     cd "$BRAINSTEM_HOME/src/rapp_brainstem"
 
-    # Kill any existing brainstem on port 7071 before starting
+    # Kill any existing brainstem on port 7071 before starting. Match the LISTENER
+    # only — a bare port match can hit a client connection (a browser tab, curl)
+    # and leave the old server running. install.ps1 already does listener-only.
     local existing_pid
-    existing_pid=$(lsof -ti:7071 2>/dev/null | head -1)
+    existing_pid=$(lsof -ti tcp:7071 -sTCP:LISTEN 2>/dev/null | head -1)
     if [ -n "$existing_pid" ]; then
         echo -e "  ${YELLOW}⚠${NC} Stopping existing server (PID $existing_pid)..."
         kill "$existing_pid" 2>/dev/null
         sleep 1
     fi
 
-    # Open the browser after a short delay
-    (sleep 3 && (open "http://localhost:7071" 2>/dev/null || xdg-open "http://localhost:7071" 2>/dev/null)) &
+    # Open the browser once the server actually answers (#14) — a fixed delay
+    # races cold startups (token exchange, dep installs) and lands the user on
+    # a dead-port error page. Poll /health, then open; after 60s open anyway so
+    # the user still gets the tab (with the URL bar filled in) on a slow start.
+    (
+        for _ in $(seq 1 60); do
+            if curl -sf -o /dev/null --max-time 1 "http://localhost:7071/health" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        open "http://localhost:7071" 2>/dev/null || xdg-open "http://localhost:7071" 2>/dev/null || true
+    ) &
 
     # Final dep safety net — if somehow we got here without deps, fix it
-    if ! "$venv_python" -c "import flask, requests, dotenv" 2>/dev/null; then
+    if ! "$venv_python" -c "import flask, flask_cors, requests, dotenv, pyzipper" 2>/dev/null; then
         echo -e "  ${YELLOW}⚠${NC} Fixing missing dependencies..."
         "$VENV_DIR/bin/pip" install -r "$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt" --quiet 2>/dev/null || \
             "$VENV_DIR/bin/pip" install -r "$BRAINSTEM_HOME/src/rapp_brainstem/requirements.txt"
@@ -645,8 +805,16 @@ with open(sys.argv[2], 'w') as f: json.dump(out, f)
     # When piped (curl | bash), exec can lose the TTY and hang.
     if [ -t 0 ]; then
         exec "$venv_python" brainstem.py
-    else
+    elif ( : </dev/tty ) 2>/dev/null; then
+        # Piped installer with a USABLE controlling terminal — reattach stdin.
+        # Test by opening it: the /dev/tty node exists even without a controlling
+        # terminal (ssh without -t, CI), where only the open fails — a bare `-e`
+        # check would take this branch and die on the redirect.
         "$venv_python" brainstem.py </dev/tty
+    else
+        # No controlling terminal at all (ssh without -t, CI, a container). Reattaching
+        # /dev/tty would error out; just run the server on the inherited stdin.
+        "$venv_python" brainstem.py
     fi
 }
 
