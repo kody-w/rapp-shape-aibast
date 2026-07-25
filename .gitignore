@@ -10,3 +10,8 @@ rapp_brainstem/__pycache__/
 rapp_brainstem/agents/__pycache__/
 __pycache__/
 *.pyc
+
+# Captured browser/session snapshots must never be committed — they embed
+# real identities, tenant GUIDs and key material. See tower work/2026-07-24.
+tools/tool_assets/
+snapshot-*.html
