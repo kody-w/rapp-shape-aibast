@@ -10,7 +10,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; }
-owner_item() { OWNER_ITEMS=$((OWNER_ITEMS + 1)); echo "  ! OWNER ITEM: $1"; }
+owner_item() { OWNER_ITEMS=$((OWNER_ITEMS + 1)); FAIL=$((FAIL + 1)); echo "  ! OWNER ITEM: $1"; }
 
 echo "=== RAPP Brainstem Tests ==="
 echo ""
@@ -98,8 +98,8 @@ else
     fail "skill.md missing tier content (found $TIER_COUNT)"
 fi
 
-# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 introduced the Moltbook onboarding contract; assert its exact pause marker.
-PAUSE_COUNT=$(grep -c "⏸️" "$REPO_ROOT/skill.md" || true)
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 added skill.md during a Windows encoding fix; use the exact ASCII-safe marker in the repaired text.
+PAUSE_COUNT=$(grep -c "\[PAUSE\]" "$REPO_ROOT/skill.md" || true)
 if [ "$PAUSE_COUNT" -ge 3 ]; then
     pass "skill.md has $PAUSE_COUNT pause points"
 else
@@ -124,8 +124,8 @@ echo ""
 
 echo "--- index.html ---"
 
-# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 documents the three-tier product names; keep exact names, not vague synonyms.
-if grep -q "Brainstem" "$REPO_ROOT/index.html" && grep -q "Spinal Cord" "$REPO_ROOT/index.html" && grep -q "Nervous System" "$REPO_ROOT/index.html"; then
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 intentionally synced the current landing-page tier headings.
+if grep -q "<h2>The Brainstem</h2>" "$REPO_ROOT/index.html" && grep -q "<h2>The Hippocampus</h2>" "$REPO_ROOT/index.html" && grep -q "<h2>The Nervous System</h2>" "$REPO_ROOT/index.html"; then
     pass "index.html has all 3 tiers"
 else
     fail "index.html missing tier content"
