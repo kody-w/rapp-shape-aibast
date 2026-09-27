@@ -22,7 +22,7 @@ Each tier builds on the last. Start with Tier 1. Layer up when the user is ready
 
 ## Instructions for Copilot
 
-Execute these steps autonomously. Only pause and ask the user when marked with .
+Execute these steps autonomously. Only pause and ask the user when marked with [PAUSE].
 
 After completing each tier, tell the user what they just learned and offer the next tier. Do not proceed to the next tier unless the user asks.
 
@@ -64,7 +64,7 @@ It auto-installs Python 3.11, Git, and GitHub CLI via winget on a factory Window
 
 ### Step 2: GitHub Authentication
 
-Tell the user:
+[PAUSE] Tell the user:
 
 > ** The brainstem uses your GitHub Copilot subscription as its AI engine -- no API keys needed.**
 >
@@ -133,7 +133,7 @@ curl -s -X POST http://localhost:7071/chat \
 
 ### Step 5: Tier 1 Complete
 
-Tell the user:
+[PAUSE] Tell the user:
 
 > ** Your brainstem is alive!**
 >
@@ -194,7 +194,7 @@ npm install -g azure-functions-core-tools@4 --unsafe-perm true
 
 ### Step 7: Azure Authentication
 
-Tell the user:
+[PAUSE] Tell the user:
 
 > ** Let's give your brainstem a cloud body.**
 >
@@ -321,7 +321,7 @@ cat > ~/.config/brainstem/state.json << AZSTATE
 AZSTATE
 ```
 
-Tell the user:
+[PAUSE] Tell the user:
 
 > ** Spinal cord connected!** Your brainstem is deployed to Azure.
 >
@@ -355,7 +355,7 @@ Only run this tier if the user asks to connect to Copilot Studio.
 
 ### Step 12: Import the Power Platform Solution
 
-Tell the user:
+[PAUSE] Tell the user:
 
 > ** Let's give your brainstem a nervous system -- connecting it to Teams and M365 Copilot.**
 >

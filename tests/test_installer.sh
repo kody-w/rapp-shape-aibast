@@ -5,10 +5,12 @@
 set -e
 PASS=0
 FAIL=0
+OWNER_ITEMS=0
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1"; }
+owner_item() { OWNER_ITEMS=$((OWNER_ITEMS + 1)); FAIL=$((FAIL + 1)); echo "  ! OWNER ITEM: $1"; }
 
 echo "=== RAPP Brainstem Tests ==="
 echo ""
@@ -96,7 +98,8 @@ else
     fail "skill.md missing tier content (found $TIER_COUNT)"
 fi
 
-PAUSE_COUNT=$(grep -c "⏸️" "$REPO_ROOT/skill.md" || true)
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 added skill.md during a Windows encoding fix; use the exact ASCII-safe marker in the repaired text.
+PAUSE_COUNT=$(grep -c "\[PAUSE\]" "$REPO_ROOT/skill.md" || true)
 if [ "$PAUSE_COUNT" -ge 3 ]; then
     pass "skill.md has $PAUSE_COUNT pause points"
 else
@@ -121,7 +124,8 @@ echo ""
 
 echo "--- index.html ---"
 
-if grep -q "Brainstem" "$REPO_ROOT/index.html" && grep -q "Spinal Cord" "$REPO_ROOT/index.html" && grep -q "Nervous System" "$REPO_ROOT/index.html"; then
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 intentionally synced the current landing-page tier headings.
+if grep -q "<h2>The Brainstem</h2>" "$REPO_ROOT/index.html" && grep -q "<h2>The Hippocampus</h2>" "$REPO_ROOT/index.html" && grep -q "<h2>The Nervous System</h2>" "$REPO_ROOT/index.html"; then
     pass "index.html has all 3 tiers"
 else
     fail "index.html missing tier content"
@@ -193,7 +197,8 @@ else
     fail "requirements.txt missing"
 fi
 
-for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 current brainstem exposes agent management at /agents; /repos is not a route.
+for endpoint in "/chat" "/health" "/login" "/models" "/agents"; do
     if grep -q "\"$endpoint\"" "$REPO_ROOT/rapp_brainstem/brainstem.py"; then
         pass "brainstem.py has $endpoint endpoint"
     else
@@ -201,7 +206,8 @@ for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
     fi
 done
 
-if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/basic_agent.py"; then
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 placed BasicAgent in rapp_brainstem/agents/basic_agent.py.
+if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py"; then
     pass "basic_agent.py has perform() and to_tool()"
 else
     fail "basic_agent.py missing required methods"
@@ -213,26 +219,30 @@ echo ""
 
 echo "--- onboarding agent ---"
 
-if grep -q "OnboardingGuide" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent has OnboardingGuide class"
-else
-    fail "onboarding agent missing OnboardingGuide class"
-fi
+HELLO_AGENT="$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"
+# 8b8b09cc40328ac047a0409f87be6c02a126a4a1 does not establish an intentional removal of OnboardingGuide. Restoring it
+# would require adding a grail-adjacent rapp_brainstem/ file, so keep the exact
+# onboarding contract visible as an owner item instead of weakening it.
+if [ -f "$HELLO_AGENT" ]; then
+    if grep -q "OnboardingGuide" "$HELLO_AGENT"; then
+        pass "onboarding agent has OnboardingGuide class"
+    else
+        fail "onboarding agent missing OnboardingGuide class"
+    fi
 
-if grep -q "skill.md" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads skill.md"
-else
-    fail "onboarding agent should read skill.md"
-fi
+    if grep -q "skill.md" "$HELLO_AGENT"; then
+        pass "onboarding agent reads skill.md"
+    else
+        fail "onboarding agent should read skill.md"
+    fi
 
-if grep -q "state.json" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads saved state"
-else
-    fail "onboarding agent should read user progress state"
-fi
+    if grep -q "state.json" "$HELLO_AGENT"; then
+        pass "onboarding agent reads saved state"
+    else
+        fail "onboarding agent should read user progress state"
+    fi
 
-# Test that the agent actually loads and runs
-AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && python3 -c "
+    AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && python3 -c "
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath('.')))
 sys.path.insert(0, '.')
@@ -251,10 +261,13 @@ result = a.perform(topic='install')
 assert 'skill.md' in result and 'curl' in result and 'irm' in result
 print('ok')
 " 2>&1)
-if [ "$AGENT_TEST" = "ok" ]; then
-    pass "onboarding agent loads, runs, and returns correct content"
+    if [ "$AGENT_TEST" = "ok" ]; then
+        pass "onboarding agent loads, runs, and returns correct content"
+    else
+        fail "onboarding agent runtime test failed: $AGENT_TEST"
+    fi
 else
-    fail "onboarding agent runtime test failed: $AGENT_TEST"
+    owner_item "OnboardingGuide agent missing; exact contract still requires rapp_brainstem/agents/hello_agent.py to read skill.md and state.json and serve overview/agents/next/install"
 fi
 
 echo ""
@@ -305,10 +318,13 @@ echo ""
 
 TOTAL=$((PASS + FAIL))
 echo "=== Results: $PASS/$TOTAL passed ==="
+if [ "$OWNER_ITEMS" -gt 0 ]; then
+    echo "  $OWNER_ITEMS owner item(s) require product-owner action"
+fi
 if [ "$FAIL" -gt 0 ]; then
     echo "  $FAIL test(s) failed"
     exit 1
 else
-    echo "  All tests passed! ✓"
+    echo "  All runnable tests passed! ✓"
     exit 0
 fi
