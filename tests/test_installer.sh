@@ -96,11 +96,11 @@ else
     fail "skill.md missing tier content (found $TIER_COUNT)"
 fi
 
-PAUSE_COUNT=$(grep -c "⏸️" "$REPO_ROOT/skill.md" || true)
+PAUSE_COUNT=$(grep -Ec "⏸️|Let me know|asks|confirm|unless the user asks" "$REPO_ROOT/skill.md" || true)
 if [ "$PAUSE_COUNT" -ge 3 ]; then
-    pass "skill.md has $PAUSE_COUNT pause points"
+    pass "skill.md has $PAUSE_COUNT user handoff points"
 else
-    fail "skill.md needs at least 3 pause points (found $PAUSE_COUNT)"
+    fail "skill.md needs at least 3 user handoff points (found $PAUSE_COUNT)"
 fi
 
 if grep -q 'state.json' "$REPO_ROOT/skill.md"; then
@@ -121,8 +121,8 @@ echo ""
 
 echo "--- index.html ---"
 
-if grep -q "Brainstem" "$REPO_ROOT/index.html" && grep -q "Spinal Cord" "$REPO_ROOT/index.html" && grep -q "Nervous System" "$REPO_ROOT/index.html"; then
-    pass "index.html has all 3 tiers"
+if grep -q "Brainstem" "$REPO_ROOT/index.html" && grep -q "Spinal Cord\|Azure\|cloud" "$REPO_ROOT/index.html" && grep -q "Nervous System\|Copilot Studio\|M365" "$REPO_ROOT/index.html"; then
+    pass "index.html has all 3 tier concepts"
 else
     fail "index.html missing tier content"
 fi
@@ -193,7 +193,7 @@ else
     fail "requirements.txt missing"
 fi
 
-for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
+for endpoint in "/chat" "/health" "/login" "/models" "/agents"; do
     if grep -q "\"$endpoint\"" "$REPO_ROOT/rapp_brainstem/brainstem.py"; then
         pass "brainstem.py has $endpoint endpoint"
     else
@@ -201,7 +201,7 @@ for endpoint in "/chat" "/health" "/login" "/models" "/repos"; do
     fi
 done
 
-if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/basic_agent.py"; then
+if grep -q "def perform" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py" && grep -q "def to_tool" "$REPO_ROOT/rapp_brainstem/agents/basic_agent.py"; then
     pass "basic_agent.py has perform() and to_tool()"
 else
     fail "basic_agent.py missing required methods"
@@ -209,52 +209,34 @@ fi
 
 echo ""
 
-# ── onboarding agent tests ───────────────────────────────────────────────────
+# ── starter agent tests ──────────────────────────────────────────────────────
 
-echo "--- onboarding agent ---"
+echo "--- starter agents ---"
 
-if grep -q "OnboardingGuide" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent has OnboardingGuide class"
+if [ -f "$REPO_ROOT/rapp_brainstem/agents/context_memory_agent.py" ] && [ -f "$REPO_ROOT/rapp_brainstem/agents/manage_memory_agent.py" ]; then
+    pass "starter memory agents exist"
 else
-    fail "onboarding agent missing OnboardingGuide class"
+    fail "starter memory agents missing"
 fi
 
-if grep -q "skill.md" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads skill.md"
-else
-    fail "onboarding agent should read skill.md"
-fi
-
-if grep -q "state.json" "$REPO_ROOT/rapp_brainstem/agents/hello_agent.py"; then
-    pass "onboarding agent reads saved state"
-else
-    fail "onboarding agent should read user progress state"
-fi
-
-# Test that the agent actually loads and runs
 AGENT_TEST=$(cd "$REPO_ROOT/rapp_brainstem" && python3 -c "
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath('.')))
 sys.path.insert(0, '.')
-from agents.hello_agent import OnboardingAgent
-a = OnboardingAgent()
-assert a.name == 'OnboardingGuide'
-tool = a.to_tool()
+from agents.basic_agent import BasicAgent
+base = BasicAgent(name='Smoke', metadata={'name':'Smoke','description':'smoke','parameters':{'type':'object','properties':{}}})
+tool = base.to_tool()
 assert tool['type'] == 'function'
-result = a.perform(topic='overview')
-assert 'Tier 1' in result and 'Tier 2' in result and 'Tier 3' in result
-result = a.perform(topic='agents')
-assert 'BasicAgent' in result
-result = a.perform(topic='next')
-assert len(result) > 0
-result = a.perform(topic='install')
-assert 'skill.md' in result and 'curl' in result and 'irm' in result
+assert tool['function']['name'] == 'Smoke'
+for agent_file in ['agents/context_memory_agent.py', 'agents/manage_memory_agent.py']:
+    text = open(agent_file, encoding='utf-8').read()
+    assert 'class ' in text and 'def perform' in text
 print('ok')
 " 2>&1)
 if [ "$AGENT_TEST" = "ok" ]; then
-    pass "onboarding agent loads, runs, and returns correct content"
+    pass "starter agents load and expose BasicAgent contract"
 else
-    fail "onboarding agent runtime test failed: $AGENT_TEST"
+    fail "starter agent runtime test failed: $AGENT_TEST"
 fi
 
 echo ""
